@@ -27,13 +27,14 @@ comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
 
-mol_id = 100 #chain corresponding to mol_id to be visualized
-N = 48000 #number of beads/atoms of interest (from atom 1 to atom N / atom 0 to atom N-1)
+mol_id = 2 #chain corresponding to mol_id to be visualized
+N = 48000 #number of only beads/atoms constructing chains (from atom 1 to atom N / atom 0 to atom N-1)
+n = 2400 #number of chains/molecules
 subs = 0 #1 if for subsequent simulation
 filename = 'further6.png'
 f_path = '/data/bcpfilm/pure/N20_f25_48000/equil/1.2/further/further2/further3/further4/further5/further6/'
 f_name = 'dump.'
-f_ind = np.linspace(0, 10000000, 1001, dtype=int) #file index
+f_ind = np.linspace(0, 1500000, 151, dtype=int) #file index
 
 avg_rows_per_process = int(len(f_ind)/size)
 
@@ -54,15 +55,12 @@ if rank == 0:
     trj_init = np.loadtxt(infile, skiprows=9)
     trj_init = trj_init[np.lexsort(np.fliplr(trj_init).T)][:N,:]
 
-    #molecule of interest at the starting point
-    moi_init = trj_init[trj_init[:,1] == mol_id,:]
- 
 else:
     box = None
-    moi_init = None
+    trj_init = None
 
 box = comm.bcast(box, root=0)
-moi_init = comm.bcast(moi_init, root=0)
+trj_init = comm.bcast(trj_init, root=0)
 
 dis = {}
 
@@ -79,21 +77,18 @@ for iind in range(start_row, end_ind):
     trj = np.loadtxt(infile, skiprows=9)
     trj = trj[np.lexsort(np.fliplr(trj).T)][:N,:]
 
-    #molecules of interest at given timestep
-    moi = trj[trj[:,1] == mol_id,:]
-        
-    dis_temp = np.zeros(moi.shape)
-    dis_temp[:,:3] = moi[:,:3]
+    dis_temp = np.zeros(trj.shape)
+    dis_temp[:,:3] = trj[:,:3]
 
     if iind > start_row: #start_row for rank of 0 is equal to 0
-        for jind in range(moi.shape[0]):
+        for jind in range(trj.shape[0]):
             #displacement vector over pbc
-            dis_temp[jind,3:] = d_pbc(moi[jind,3:],moi_prev[jind,3:],[box[0][1]-box[0][0], box[1][1]-box[1][0]])
+            dis_temp[jind,3:] = d_pbc(trj[jind,3:],trj_prev[jind,3:],[box[0][1]-box[0][0], box[1][1]-box[1][0]])
 
         dis_temp[:,3:] += dis[iind-1][:,3:]
 
     dis.update({iind : dis_temp})
-    moi_prev = moi
+    trj_prev = trj
 
 'calculate displacements'
 if rank == 0:
@@ -105,7 +100,7 @@ if rank == 0:
         req.Wait()
 
 elif rank == size-1:
-    data = np.empty(moi.shape)
+    data = np.empty(trj.shape)
     req = comm.Irecv(data, source=(rank-1))
     req.Wait()
 
@@ -113,7 +108,7 @@ elif rank == size-1:
         dis[iind][:,3:] += data[:,3:]
 
 else:
-    data = np.empty(moi.shape)
+    data = np.empty(trj.shape)
     req = comm.Irecv(data, source=(rank-1))
     req.Wait()
 
@@ -131,9 +126,16 @@ if rank == 0:
     t1 = time.time() - t0
     print (t1)
 
-    centers = np.zeros([end_row - start_row,2])
+    print (trj_init[0])
+    centers = np.zeros([end_row - start_row,2,n])
     for iind in range(start_row, end_row):
-        centers[iind - start_row,:] = np.average((moi_init + dis[iind])[:2,3:5],axis=0)
+        trj = trj_init
+        print (iind, trj_init[0])
+        trj[:,3:] += dis[iind][:,3:]
+        for jind in range(n):
+            logic = trj[:,1] == (jind+1)
+            moi = trj[logic]
+            centers[iind - start_row,:,jind] = np.average(moi[:2,3:5],axis=0)
 
     for iind in range(1, size):
         start_row = iind * avg_rows_per_process
@@ -141,16 +143,21 @@ if rank == 0:
         if iind == size-1:
             end_row = len(f_ind)
 
-        centers_temp = np.empty([end_row - start_row,2])
+        centers_temp = np.empty([end_row - start_row,2,n])
         req = comm.Irecv(centers_temp, source=iind)
         req.Wait()
 
         centers = np.vstack((centers, centers_temp))
 
 else:
-    centers_temp = np.zeros([end_row - start_row,2])
+    centers_temp = np.zeros([end_row - start_row,2,n])
     for iind in range(start_row, end_row):
-        centers_temp[iind - start_row,:] = np.average((moi_init + dis[iind])[:2,3:5],axis=0)
+        trj = trj_init
+        trj[:,3:] += dis[iind][:,3:]
+        for jind in range(n):
+            logic = trj[:,1] == (jind+1)
+            moi = trj[logic]
+            centers_temp[iind - start_row,:,jind] = np.average(moi[:2,3:5],axis=0)
 
     req = comm.Isend(centers_temp, dest=0)
     req.Wait()
@@ -163,19 +170,20 @@ if rank == 0:
     #calculate traveling distance until arriving at the endig point instead of counthing the number of hopping events
     segment = 0
     for iind in range(1,len(centers)):
-        segment += np.linalg.norm(centers[iind] - centers[iind-1])
-    print (segment)
+        segment += np.linalg.norm(centers[iind,:,mol_id-1] - centers[iind-1,:,mol_id-1])
+    print ('travel distance: %f' % segment)
 
     #color varies with timestep
     plt.figure()
     bins = 10
-    for iind in range(bins):
-        color = [1.0/(bins+1)*(iind+1),1.0/(bins+1)*(iind+1),1.0/(bins+1)*(iind+1)]
-        plt.plot(centers[len(centers)//bins*(iind):len(centers)//bins*(iind+1)+1,0], centers[len(centers)//bins*(iind):len(centers)//bins*(iind+1)+1,1], color=color, lw=0.5)
+    #for iind in range(bins):
+        #color = [1.0/(bins+1)*(iind+1),1.0/(bins+1)*(iind+1),1.0/(bins+1)*(iind+1)]
+        #plt.plot(centers[len(centers)//bins*(iind):len(centers)//bins*(iind+1)+1,0,mol_id-1], centers[len(centers)//bins*(iind):len(centers)//bins*(iind+1)+1,1,mol_id-1], color=color, lw=0.5)
 
-    plt.plot(centers[0,0], centers[0,1], 'ko', ms=3, label='starting point')
-    plt.plot(centers[-1,0], centers[-1,1], 'ks', ms=3, label='ending point')
-    plt.xlim(-57,57)
+    plt.plot(centers[:,0,mol_id-1], centers[:,1,mol_id-1])
+    plt.plot(centers[0,0,mol_id-1], centers[0,1,mol_id-1], 'ko', ms=3, label='starting point')
+    plt.plot(centers[-1,0,mol_id-1], centers[-1,1,mol_id-1], 'ks', ms=3, label='ending point')
+    plt.xlim(0,114)
     plt.ylim(0,90)
     plt.gca().set_aspect('equal',adjustable='box')
     plt.savefig(filename, dpi=300)
