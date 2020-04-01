@@ -27,7 +27,7 @@ comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
 
-mol_id = 2000
+mol_id = 100 #chain corresponding to mol_id to be visualized
 N = 48000 #number of beads/atoms of interest (from atom 1 to atom N / atom 0 to atom N-1)
 subs = 0 #1 if for subsequent simulation
 filename = 'further6.png'
@@ -54,6 +54,7 @@ if rank == 0:
     trj_init = np.loadtxt(infile, skiprows=9)
     trj_init = trj_init[np.lexsort(np.fliplr(trj_init).T)][:N,:]
 
+    #molecule of interest at the starting point
     moi_init = trj_init[trj_init[:,1] == mol_id,:]
  
 else:
@@ -78,6 +79,7 @@ for iind in range(start_row, end_ind):
     trj = np.loadtxt(infile, skiprows=9)
     trj = trj[np.lexsort(np.fliplr(trj).T)][:N,:]
 
+    #molecules of interest at given timestep
     moi = trj[trj[:,1] == mol_id,:]
         
     dis_temp = np.zeros(moi.shape)
@@ -158,16 +160,22 @@ if rank == 0:
     t2 = time.time() - t0
     print (t2)
 
+    #calculate traveling distance until arriving at the endig point instead of counthing the number of hopping events
+    segment = 0
+    for iind in range(1,len(centers)):
+        segment += np.linalg.norm(centers[iind] - centers[iind-1])
+    print (segment)
+
+    #color varies with timestep
     plt.figure()
-    #plt.plot(centers[:len(centers)//2+1,0], centers[:len(centers)//2+1,1], 'orange', lw=0.5)
-    #plt.plot(centers[len(centers)//2:,0], centers[len(centers)//2:,1], 'red', lw=0.5)
     bins = 10
     for iind in range(bins):
         color = [1.0/(bins+1)*(iind+1),1.0/(bins+1)*(iind+1),1.0/(bins+1)*(iind+1)]
         plt.plot(centers[len(centers)//bins*(iind):len(centers)//bins*(iind+1)+1,0], centers[len(centers)//bins*(iind):len(centers)//bins*(iind+1)+1,1], color=color, lw=0.5)
+
     plt.plot(centers[0,0], centers[0,1], 'ko', ms=3, label='starting point')
     plt.plot(centers[-1,0], centers[-1,1], 'ks', ms=3, label='ending point')
-    plt.xlim(0,57*2)
-    plt.ylim(0,90*2)
+    plt.xlim(-57,57)
+    plt.ylim(0,90)
     plt.gca().set_aspect('equal',adjustable='box')
     plt.savefig(filename, dpi=300)
