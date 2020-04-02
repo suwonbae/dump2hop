@@ -27,14 +27,14 @@ comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
 
-mol_id = 2 #chain corresponding to mol_id to be visualized
+mol_id = 1 #chain corresponding to mol_id to be visualized
 N = 48000 #number of only beads/atoms constructing chains (from atom 1 to atom N / atom 0 to atom N-1)
 n = 2400 #number of chains/molecules
 subs = 0 #1 if for subsequent simulation
 filename = 'further6.png'
 f_path = '/data/bcpfilm/pure/N20_f25_48000/equil/1.2/further/further2/further3/further4/further5/further6/'
 f_name = 'dump.'
-f_ind = np.linspace(0, 1500000, 151, dtype=int) #file index
+f_ind = np.linspace(0, 10000000, 1001, dtype=int) #file index
 
 avg_rows_per_process = int(len(f_ind)/size)
 
@@ -126,12 +126,11 @@ if rank == 0:
     t1 = time.time() - t0
     print (t1)
 
-    print (trj_init[0])
     centers = np.zeros([end_row - start_row,2,n])
     for iind in range(start_row, end_row):
-        trj = trj_init
-        print (iind, trj_init[0])
-        trj[:,3:] += dis[iind][:,3:]
+        trj = np.zeros(trj_init.shape)
+        trj[:,:3] = trj_init[:,:3]
+        trj[:,3:] = trj_init[:,3:] + dis[iind][:,3:]
         for jind in range(n):
             logic = trj[:,1] == (jind+1)
             moi = trj[logic]
@@ -147,13 +146,14 @@ if rank == 0:
         req = comm.Irecv(centers_temp, source=iind)
         req.Wait()
 
-        centers = np.vstack((centers, centers_temp))
+        centers = np.vstack((centers, centers_temp)) #shape of final corresponds to (timesteps, 2, n)
 
 else:
     centers_temp = np.zeros([end_row - start_row,2,n])
     for iind in range(start_row, end_row):
-        trj = trj_init
-        trj[:,3:] += dis[iind][:,3:]
+        trj = np.zeros(trj_init.shape)
+        trj[:,:3] = trj_init[:,:3]
+        trj[:,3:] = trj_init[:,3:] + dis[iind][:,3:]
         for jind in range(n):
             logic = trj[:,1] == (jind+1)
             moi = trj[logic]
@@ -168,22 +168,48 @@ if rank == 0:
     print (t2)
 
     #calculate traveling distance until arriving at the endig point instead of counthing the number of hopping events
-    segment = 0
-    for iind in range(1,len(centers)):
-        segment += np.linalg.norm(centers[iind,:,mol_id-1] - centers[iind-1,:,mol_id-1])
-    print ('travel distance: %f' % segment)
+    segments = []
+    for iind in range(n):
+        segment = 0
+        for jind in range(1,len(centers)):
+            segment += np.linalg.norm(centers[jind,:,iind] - centers[jind-1,:,iind])
+        segments.append(segment)
+    
+    #mol_id's which exhibits min and max among n segment values
+    min_id = np.argmin(segments)
+    max_id = np.argmax(segments)
 
-    #color varies with timestep
+    t3 = time.time() - t0
+    print (t3)
+
     plt.figure()
-    bins = 10
+    bins = np.linspace(1600,2400,17)
+    hist, bin_edges = np.histogram(segments, bins=bins, density=True)
+    plt.plot(bin_edges[1:], hist)
+    plt.xlabel(r'travel distance ($\sigma$)')
+    plt.ylabel('probability')
+    plt.savefig('segments.png',dpi=300)
+
+    plt.figure()
+    plt.plot(centers[:,0,max_id], centers[:,1,max_id], lw=0.5)
+    plt.plot(centers[0,0,max_id], centers[0,1,max_id], 'ko', ms=3, label='starting point')
+    plt.plot(centers[-1,0,max_id], centers[-1,1,max_id], 'ks', ms=3, label='ending point')
+    plt.xlim(0,114)
+    plt.ylim(0,90)
+    plt.gca().set_aspect('equal',adjustable='box')
+    plt.savefig('max_' + filename, dpi=300)
+
+    plt.figure()
+    plt.plot(centers[:,0,min_id], centers[:,1,min_id], lw=0.5)
+    plt.plot(centers[0,0,min_id], centers[0,1,min_id], 'ko', ms=3, label='starting point')
+    plt.plot(centers[-1,0,min_id], centers[-1,1,min_id], 'ks', ms=3, label='ending point')
+    plt.xlim(0,114)
+    plt.ylim(0,90)
+    plt.gca().set_aspect('equal',adjustable='box')
+    plt.savefig('min_' + filename, dpi=300)
+
+#bins = 10
     #for iind in range(bins):
         #color = [1.0/(bins+1)*(iind+1),1.0/(bins+1)*(iind+1),1.0/(bins+1)*(iind+1)]
         #plt.plot(centers[len(centers)//bins*(iind):len(centers)//bins*(iind+1)+1,0,mol_id-1], centers[len(centers)//bins*(iind):len(centers)//bins*(iind+1)+1,1,mol_id-1], color=color, lw=0.5)
 
-    plt.plot(centers[:,0,mol_id-1], centers[:,1,mol_id-1])
-    plt.plot(centers[0,0,mol_id-1], centers[0,1,mol_id-1], 'ko', ms=3, label='starting point')
-    plt.plot(centers[-1,0,mol_id-1], centers[-1,1,mol_id-1], 'ks', ms=3, label='ending point')
-    plt.xlim(0,114)
-    plt.ylim(0,90)
-    plt.gca().set_aspect('equal',adjustable='box')
-    plt.savefig(filename, dpi=300)
